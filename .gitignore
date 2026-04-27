@@ -1,0 +1,20 @@
+# env
+.env
+
+# python
+__pycache__/
+*.pyc
+
+# virtual env
+venv/
+
+# data (חשוב לך מאוד לפרויקט שלך)
+data/
+*.faiss
+*.pkl
+
+# OS
+.DS_Store
+
+# notebooks
+.ipynb_checkpoints/
