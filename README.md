@@ -3,15 +3,15 @@
   <img src="https://upload.wikimedia.org/wikipedia/commons/c/c3/Python-logo-notext.svg" alt="Logo" width="120" height="120">
 </p>
 
-<h1 align="center">My Python Project</h1>
+<h1 align="center">Python Developer Recruiter Bot</h1>
 
 <p align="center">
-  A feature-rich Python project<br>
-  <a href="#demo">View Demo</a>
+  A multi-agent SMS-style chatbot that recruits Python Developer candidates<br>
+  <a href="https://github.com/Shahar-Weisberger-Chucky/gen_ai_project">View Repo</a>
   ·
-  <a href="#demo">Report Bug</a>
+  <a href="https://github.com/Shahar-Weisberger-Chucky/gen_ai_project/issues">Report Bug</a>
   ·
-  <a href="#demo">Request Feature</a>
+  <a href="https://github.com/Shahar-Weisberger-Chucky/gen_ai_project/issues">Request Feature</a>
 </p>
 
 ---
@@ -39,11 +39,25 @@
 
 ## About The Project
 
-> This project demonstrates a simple...<br>
+> I built this as my final project for the Generative AI & LLMs hands-on course.
+> The idea is a recruiting chatbot that talks to Python Developer candidates over SMS —
+> it collects their background, answers questions about the job from a PDF knowledge base,
+> checks the recruiter's actual calendar for open slots, and knows when to close the conversation.
 
 <div style="background: #272822; color: #f8f8f2; padding: 10px; border-radius: 8px;">
-  <b> Technologies:</b> Python, Pandas, NumPy, Matplotlib, OpenAI API
+  <b>Technologies:</b> Python, LangChain, OpenAI API, Chroma (vector DB), SQL Server, Streamlit
 </div>
+
+### Architecture
+
+The system is split into four agents — one main orchestrator and three specialized advisors:
+
+| Agent | What it does |
+|---|---|
+| **Main Agent** | Runs the conversation turn by turn. Decides: `continue` / `schedule` / `end` |
+| **Exit Advisor** | Reads the conversation and decides if it's time to close — supports a fine-tuned model |
+| **Scheduling Advisor** | Calls an SQL Server tool (via LangChain `@tool` + `AgentExecutor`) to find open slots |
+| **Info Advisor** | RAG over the job description PDF to answer candidate questions |
 
 ---
 
@@ -51,14 +65,15 @@
 
 ## Features
 
-- [x] Data loading and cleaning
-- [x] Data handaling with Pandas & NumPy
-- [x] Streamlit
-- [x] LangChain
-- [x] Agent Orchestration
-- [x] Modern Python project structure
-- [x] <span style="color: green; font-weight: bold;">Easy customization</span>
-- [ ] Cloud deployment _(coming soon!)_
+- [x] Multi-agent orchestration with LangChain + OpenAI
+- [x] RAG pipeline — job description PDF embedded into Chroma vector database
+- [x] SQL Server function calling via LangChain `@tool` and `AgentExecutor`
+- [x] Fine-tuning pipeline for the Exit Advisor (`gpt-4.1-2025-04-14`)
+- [x] Streamlit chat UI (SMS-style PoC)
+- [x] Evaluation notebook — Accuracy & Confusion Matrix on labeled conversations
+- [x] Role, instruction, few-shot, and API-parameter prompting strategies
+- [x] Modern Python project structure with virtual environment
+- [ ] Streamlit Community Cloud deployment _(coming soon!)_
 
 ---
 
@@ -66,20 +81,50 @@
 
 ## Getting Started
 
-Explain how to get started with the project...
-
 ### Prerequisites
 
-- Python >= 3.8
+- Python >= 3.10
 - pip
+- SQL Server (with SSMS) — run `db_Tech.sql` once to create the `Tech` database
+- OpenAI API key
 
 ### Installation
 
 ```bash
-git clone https://github.com/yourusername/python-project.git
-cd python-project
+git clone https://github.com/Shahar-Weisberger-Chucky/gen_ai_project.git
+cd gen_ai_project
+python -m venv venv
+venv\Scripts\activate        # Windows
 pip install -r requirements.txt
 ```
+
+### Configuration
+
+Create a `.env` file in the project root with:
+
+```env
+OPENAI_API_KEY=sk-...
+
+SQL_SERVER=localhost
+SQL_DATABASE=Tech
+SQL_DRIVER={ODBC Driver 17 for SQL Server}
+SQL_TRUSTED_CONNECTION=yes
+```
+
+### One-time Setup
+
+**1. Create the SQL Server database**
+
+Open `db_Tech.sql` in SQL Server Management Studio and execute it.
+This creates the `Tech` database with a `Schedule` table seeded with interview availability.
+
+**2. Build the Chroma vector database**
+
+```bash
+python -m app.modules.embedding.embedding
+```
+
+This embeds `Python Developer Job Description.pdf` into a local `chroma_db/` folder.
 
 ---
 
@@ -87,17 +132,34 @@ pip install -r requirements.txt
 
 ## Usage
 
-```python
-from python_project import pp
-
-result = pp.my_function()
-print(result)
-```
-
-### Or run the CLI:
+### Run the Streamlit UI
 
 ```bash
-python main.py
+streamlit run streamlit_app/streamlit_main.py
+```
+
+Open your browser at `http://localhost:8501`.
+
+### Run the CLI (for quick testing)
+
+```bash
+python -m app.main
+```
+
+### Run the Evaluation Notebook
+
+Open `tests/test_evals.ipynb` in Jupyter and run all cells.
+
+### Fine-tune the Exit Advisor (optional)
+
+```python
+from app.modules.fine_tuning.fine_tuning import upload_and_train
+job_id = upload_and_train()   # prepares data, uploads, and starts the job
+```
+
+Once complete, add the returned model ID to `.env`:
+```env
+EXIT_ADVISOR_MODEL=ft:gpt-4.1-2025-04-14:your-org:exit-advisor:xxxxxxxx
 ```
 
 ---
@@ -106,9 +168,7 @@ python main.py
 
 ## Screenshots
 
-<p float="left">
-  <img src="https://mir-s3-cdn-cf.behance.net/project_modules/max_1200/e50214173218977.648c4882a75d6.gif"  width="400"/>
-</p>
+_Add screenshots here after deployment._
 
 ---
 
@@ -116,15 +176,31 @@ python main.py
 
 ## Code Examples
 
+### Start a conversation programmatically
+
 ```python
-import pandas as pd
-from openai import OpenAI
+from app.main import create_agent
 
-client = OpenAI(api_key="your_api_key_here") # Replace with your actual API key or use environment variable
+agent = create_agent()
+message, action = agent.process_turn("I have 4 years of Python experience.")
+print(f"[{action}] {message}")
+```
 
-# Load data
-df = pd.read_csv('data/dataset.csv')
+### Query available interview slots directly
 
+```python
+from app.modules.scheduling_advisor.scheduling_advisor import get_available_slots
+
+slots = get_available_slots.invoke({"reference_date": "2025-04-10"})
+print(slots)
+```
+
+### Build the vector database
+
+```python
+from app.modules.embedding.embedding import build_vectorstore
+
+vectorstore = build_vectorstore()   # reads PDF, embeds, saves to chroma_db/
 ```
 
 ---
@@ -134,17 +210,45 @@ df = pd.read_csv('data/dataset.csv')
 ## Project Structure
 
 ```text
-python-project/
-├── data/
-│   └── dataset.csv
-├── python_project/
-│   ├── __init__.py
-│   └── python_project.py
-├── tests/
-│   └── test.py
-├── main.py
+final_project/
+├── .gitignore
+├── .env                              # Environment variables (not committed)
 ├── requirements.txt
-└── README.md
+├── README.md
+├── db_Tech.sql                       # SQL Server schema — run in SSMS
+├── sms_conversations.json            # Labeled conversation dataset
+├── Python Developer Job Description.pdf
+│
+├── app/                              # Main application package
+│   ├── __init__.py
+│   ├── main.py                       # Entry point (CLI)
+│   └── modules/
+│       ├── __init__.py
+│       ├── main_agent/
+│       │   ├── __init__.py
+│       │   └── main_agent.py         # Orchestrator agent
+│       ├── exit_advisor/
+│       │   ├── __init__.py
+│       │   └── exit_advisor.py       # End-conversation detector (fine-tunable)
+│       ├── scheduling_advisor/
+│       │   ├── __init__.py
+│       │   └── scheduling_advisor.py # SQL tool calling + AgentExecutor
+│       ├── info_advisor/
+│       │   ├── __init__.py
+│       │   └── info_advisor.py       # RAG over job description
+│       ├── embedding/
+│       │   ├── __init__.py
+│       │   └── embedding.py          # PDF → Chroma vector DB
+│       └── fine_tuning/
+│           ├── __init__.py
+│           └── fine_tuning.py        # Exit Advisor fine-tuning pipeline
+│
+├── streamlit_app/                    # Streamlit UI
+│   ├── __init__.py
+│   └── streamlit_main.py
+│
+└── tests/
+    └── test_evals.ipynb              # Accuracy + Confusion Matrix evaluation
 ```
 
 ---
@@ -153,10 +257,17 @@ python-project/
 
 ## To-Do List
 
-- [x] Initial project setup
-- [x] Add python_project module
-- [ ] Improve documentation
-- [ ] Add web interface
+- [x] Project scaffold & Git setup
+- [x] SQL Server schema (`db_Tech.sql`)
+- [x] Embedding pipeline (PDF → Chroma)
+- [x] Exit Advisor (with fine-tuning pipeline)
+- [x] Scheduling Advisor (SQL tool calling via AgentExecutor)
+- [x] Info Advisor (RAG)
+- [x] Main Agent orchestration
+- [x] Streamlit chat UI
+- [x] Evaluation notebook (Accuracy, Confusion Matrix)
+- [ ] Fine-tune Exit Advisor on labeled data
+- [ ] Deploy to Streamlit Community Cloud
 
 ---
 
@@ -164,7 +275,7 @@ python-project/
 
 ## Contributing
 
-Contributions are **welcome**! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are **welcome**! Please open an issue or pull request.
 
 ---
 
@@ -172,7 +283,7 @@ Contributions are **welcome**! Please read [CONTRIBUTING.md](CONTRIBUTING.md) fo
 
 ## License
 
-Distributed under the XXX License. See `LICENSE` for more information.
+Distributed under the MIT License.
 
 ---
 
@@ -180,8 +291,8 @@ Distributed under the XXX License. See `LICENSE` for more information.
 
 ## Contact
 
-**Your Name** - [@yourtmail@gmail.com](yourmail@gmail.com)  
-Project Link: [https://github.com/yourusername/python-project](https://github.com/yourusername/python-project)
+**Shahar Weisberger-Chucky**  
+Project Link: [https://github.com/Shahar-Weisberger-Chucky/gen_ai_project](https://github.com/Shahar-Weisberger-Chucky/gen_ai_project)
 
 ---
 
@@ -189,8 +300,10 @@ Project Link: [https://github.com/yourusername/python-project](https://github.co
 
 ## Acknowledgments
 
-- [Python](https://www.python.org/)
-- [Pandas](https://pandas.pydata.org/)
+- [LangChain](https://python.langchain.com/)
 - [OpenAI API](https://platform.openai.com/docs/overview)
+- [Chroma](https://www.trychroma.com/)
+- [Streamlit](https://streamlit.io/)
+- [scikit-learn](https://scikit-learn.org/)
 
 ---

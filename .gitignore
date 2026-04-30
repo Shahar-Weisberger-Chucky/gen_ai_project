@@ -1,20 +1,41 @@
-# env
+# Environment variables (never commit secrets)
 .env
 
-# python
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
 
-# virtual env
+# Virtual environment
 venv/
+.venv/
 
-# data (חשוב לך מאוד לפרויקט שלך)
-data/
-*.faiss
-*.pkl
+# Vector DB (generated, do not commit)
+chroma_db/
+
+# Fine-tuning output
+fine_tuning_data/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+
+
+# Streamlit Cloud secrets (local only, never commit)
+.streamlit/secrets.toml
 
 # OS
 .DS_Store
+Thumbs.db
 
-# notebooks
-.ipynb_checkpoints/
+# Course assignment files (local only)
+assignment/

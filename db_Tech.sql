@@ -23,8 +23,9 @@ CREATE TABLE dbo.Schedule
 );
 GO
 
-DECLARE @StartDate DATE = '20240101',
-        @EndDate   DATE = '20241231';
+-- Use the current calendar year so slots are always in the future
+DECLARE @StartDate DATE = DATEFROMPARTS(YEAR(GETDATE()), 1, 1),
+        @EndDate   DATE = DATEFROMPARTS(YEAR(GETDATE()), 12, 31);
 
 ;WITH
 -- Dates 2024
