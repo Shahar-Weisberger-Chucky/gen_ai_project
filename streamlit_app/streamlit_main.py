@@ -27,7 +27,7 @@ from app.main import create_agent
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Python Dev Recruiter Bot",
+    page_title="TechRecruit – Company Recruiting Bot",
     page_icon="🤖",
     layout="centered",
     initial_sidebar_state="collapsed",
@@ -42,8 +42,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.title("🤖 Python Developer Recruiter Bot")
-st.caption("Multi-agent recruiting chatbot · LangChain + OpenAI · Streamlit PoC")
+st.title("🤖 TechRecruit – Company Recruiting Bot")
+st.caption("Hi! I'm a recruiting assistant for our company. I'm here to help you through the hiring process.")
 st.divider()
 
 # ── Action badge helper ───────────────────────────────────────────────────────
@@ -59,8 +59,9 @@ if "agent" not in st.session_state:
         st.session_state.agent = create_agent()
 
     opening = (
-        "Hi! Thanks for applying to our Python Developer opening. "
-        "Could you share a bit about your Python experience?"
+        "Hi! I'm a recruiting assistant for our company. "
+        "I'm here to help you through the hiring process. "
+        "Could you tell me a bit about yourself and the role you're interested in?"
     )
     st.session_state.messages = [
         {"role": "assistant", "content": opening, "action": "continue"}

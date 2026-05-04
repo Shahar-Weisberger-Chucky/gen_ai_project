@@ -12,7 +12,8 @@ CHROMA_DIR = os.path.join(
 
 # ── Prompting strategy: Role + Instructions + RAG context + API param ────────
 
-SYSTEM_PROMPT = """You are the Conversation Info Advisor for a Python Developer recruiting chatbot.
+SYSTEM_PROMPT = """You are the Conversation Info Advisor for a tech company recruiting chatbot.
+The company hires for four roles: ML Engineer, SQL Developer, Data Analyst, and Python Developer.
 
 ROLE:
 Check whether the candidate is asking a question about the job that you should answer.

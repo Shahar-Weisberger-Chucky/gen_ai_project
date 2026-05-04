@@ -34,15 +34,16 @@ def create_agent() -> MainAgent:
 def run_cli():
     """Simple terminal loop — useful for quick testing without opening Streamlit."""
     print("=" * 50)
-    print("  Python Developer Recruiter Bot  (CLI mode)")
+    print("  TechRecruit – Company Recruiting Bot  (CLI mode)")
     print("  Type 'quit' to exit.")
     print("=" * 50 + "\n")
 
     agent = create_agent()
 
     opening = (
-        "Hi! Thanks for applying to our Python Developer opening. "
-        "Could you share a bit about your Python experience?"
+        "Hi! I'm a recruiting assistant for our company. "
+        "I'm here to help you through the hiring process. "
+        "Could you tell me a bit about yourself and the role you're interested in?"
     )
     print(f"Bot: {opening}\n")
     agent.conversation_history.append({"role": "assistant", "content": opening})

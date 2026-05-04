@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
@@ -11,14 +12,38 @@ load_dotenv()
 
 # ── SQL Tool ──────────────────────────────────────────────────────────────────
 
+
+def _normalize_position(text: str) -> str | None:
+    """Map free-text role mention to the exact DB position string."""
+    t = text.lower()
+    if "python" in t:
+        return "Python Dev"
+    if "sql" in t or "database" in t:
+        return "Sql Dev"
+    if re.search(r"\bml\b", t) or "machine learning" in t or "deep learn" in t:
+        return "ML"
+    if "analyst" in t or "data" in t:
+        return "Analyst"
+    return None
+
+
 @tool
-def get_available_slots(reference_date: str) -> str:
+def get_available_slots(reference_date: str, position_hint: str) -> str:
     """
-    Pull the next 5 available Python Dev interview slots from the SQL Server calendar.
-    Pass reference_date as YYYY-MM-DD — returns slots on or after that date.
-    If the DB only has historical data (e.g. demo year), falls back to earliest available.
-    Returns a comma-separated list of date/time pairs, or an error string.
+    Pull the next 5 available interview slots from the SQL Server calendar.
+    reference_date: YYYY-MM-DD
+    position_hint: free-text role from the conversation, e.g. "ML", "machine learning",
+                   "python developer", "sql", "analyst". The tool maps it to the DB value.
+    Returns a comma-separated list of date/time slots, or an error/clarification string.
     """
+    position = _normalize_position(position_hint)
+    if position is None:
+        return (
+            "POSITION_UNKNOWN: Could not determine the target role from the conversation. "
+            "Ask the candidate which role they are applying for: "
+            "ML Engineer, SQL Developer, Data Analyst, or Python Developer."
+        )
+
     driver = os.getenv("SQL_DRIVER", "{ODBC Driver 17 for SQL Server}")
     server = os.getenv("SQL_SERVER", "localhost")
     database = os.getenv("SQL_DATABASE", "Tech")
@@ -37,25 +62,25 @@ def get_available_slots(reference_date: str) -> str:
             """
             SELECT TOP (5) [date], [time]
             FROM   dbo.Schedule
-            WHERE  position  = 'Python Dev'
+            WHERE  position  = ?
               AND  available = 1
               AND  [date]   >= ?
             ORDER  BY [date], [time]
             """,
-            reference_date,
+            position, reference_date,
         )
         rows = cursor.fetchall()
 
-        # if nothing came back (DB has only past data), just return whatever's earliest
         if not rows:
             cursor.execute(
                 """
                 SELECT TOP (5) [date], [time]
                 FROM   dbo.Schedule
-                WHERE  position  = 'Python Dev'
+                WHERE  position  = ?
                   AND  available = 1
                 ORDER  BY [date], [time]
-                """
+                """,
+                position,
             )
             rows = cursor.fetchall()
 
@@ -69,42 +94,62 @@ def get_available_slots(reference_date: str) -> str:
 
 # ── Prompting strategy: Role + Instructions + Few-Shot + API param (temp=0) ──
 
-SYSTEM_PROMPT = """You are the Interview Scheduling Advisor for a Python Developer recruiting chatbot.
+SYSTEM_PROMPT = """You are the Interview Scheduling Advisor for a tech company recruiting chatbot.
+The company hires for four roles: ML Engineer, SQL Developer, Data Analyst, Python Developer.
 
 ROLE:
-Decide whether it is the right time to schedule an interview with this candidate.
-If yes, use the get_available_slots tool to check the calendar, then pick the best slots
-based on anything the candidate said about their availability.
+Decide whether it is the right time to schedule an interview.
+When scheduling, call get_available_slots with reference_date and position_hint extracted
+from the conversation. The tool handles mapping the role to the DB — pass the role as the
+candidate described it (e.g. "ml", "machine learning", "python", "sql", "analyst").
 
 INSTRUCTIONS:
-  • Do NOT recommend scheduling in the very first exchange — gather at least a little info first
-  • Recommend scheduling when the candidate appears qualified and interested
-  • If the candidate mentioned a preferred day or time, prioritise slots closest to that
-  • The conversation timestamp is provided so you can resolve relative dates like "next Friday"
-  • Always suggest exactly 2 or 3 specific slots when recommending scheduling
-  • If no suitable slots are available, recommend "continue" and explain
+  • IMMEDIATELY recommend schedule if the candidate explicitly requests an interview/meeting.
+    Do NOT ask about experience or qualifications in that case.
+  • If the candidate wants to schedule but the role is not clear from the conversation,
+    recommend "continue" with REASON: POSITION_UNKNOWN so the main agent can ask.
+  • If the tool returns POSITION_UNKNOWN, recommend "continue" with that reason.
+  • Recommend scheduling when the candidate appears interested, even with minimal context.
+  • Suggest exactly 2 or 3 specific slots when recommending scheduling.
+  • If no slots are available, recommend "continue" and explain.
 
 RESPONSE FORMAT (use exactly this structure):
 RECOMMENDATION: <schedule|continue>
-SLOTS: <comma-separated datetime strings like "2024-04-10 10:00, 2024-04-11 14:00", or "none">
+SLOTS: <comma-separated datetime strings, or "none">
 REASON: <one sentence>
 """
 
 FEW_SHOT = """
---- Example 1 ---
-Candidate said "I can do next Wednesday or Thursday".
-Available slots: 2024-04-10 09:00, 2024-04-10 14:00, 2024-04-11 10:00
+--- Example 1: explicit request, role clear ---
+Conversation: Candidate wants ML position and says "lets schedule for ml position"
+→ call get_available_slots(reference_date="2024-04-01", position_hint="ml")
+→ slots returned: 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
 RECOMMENDATION: schedule
-SLOTS: 2024-04-10 14:00, 2024-04-11 10:00
-REASON: Candidate is interested and available slots match their stated preference.
+SLOTS: 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
+REASON: Candidate explicitly requested an interview for the ML position.
 
---- Example 2 ---
-First message of the conversation — candidate just introduced themselves.
+--- Example 2: explicit request, role unknown ---
+Conversation: Candidate says "i want to schedule an interview" but no role mentioned yet.
+→ call get_available_slots(reference_date="2024-04-01", position_hint="")
+→ tool returns POSITION_UNKNOWN
 RECOMMENDATION: continue
 SLOTS: none
-REASON: Too early to schedule; need to gather more information first.
+REASON: POSITION_UNKNOWN
 
---- Example 3 ---
+--- Example 3: preference given, role clear ---
+Candidate said "I can do next Wednesday or Thursday" for a Python Dev role.
+→ slots: 2024-04-10 14:00, 2024-04-11 10:00
+RECOMMENDATION: schedule
+SLOTS: 2024-04-10 14:00, 2024-04-11 10:00
+REASON: Candidate is interested and slots match their stated preference.
+
+--- Example 4: first message only ---
+Candidate just introduced themselves, no scheduling intent expressed.
+RECOMMENDATION: continue
+SLOTS: none
+REASON: Too early to schedule; candidate has not expressed scheduling intent.
+
+--- Example 5: disinterest ---
 Candidate said "Please remove me from your list."
 RECOMMENDATION: continue
 SLOTS: none
