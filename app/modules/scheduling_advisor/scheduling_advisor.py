@@ -174,15 +174,30 @@ class SchedulingAdvisor:
         self,
         conversation_history: str,
         conversation_time: Optional[str] = None,
+        detected_position: Optional[str] = None,
     ) -> dict:
         ref_date = self._reference_date(conversation_time)
+
+        if detected_position:
+            position_note = (
+                f"The candidate's role has already been resolved: '{detected_position}'. "
+                f"Use '{detected_position}' as position_hint when calling get_available_slots. "
+                "Do NOT try to infer the role from the conversation."
+            )
+        else:
+            position_note = (
+                "The candidate's role is not yet known. "
+                "Try to extract it from the conversation. "
+                "If it cannot be determined, return POSITION_UNKNOWN."
+            )
 
         user_input = (
             f"{FEW_SHOT}\n\n"
             f"--- Current Conversation ---\n{conversation_history}\n\n"
             f"Conversation timestamp: {conversation_time or 'unknown'}\n"
-            f"Call get_available_slots with reference_date='{ref_date}', then decide "
-            "whether to schedule an interview now."
+            f"Position context: {position_note}\n"
+            f"reference_date='{ref_date}'\n"
+            "Decide whether to schedule an interview. If yes, call get_available_slots."
         )
 
         result = self.agent.invoke({"messages": [{"role": "user", "content": user_input}]})
