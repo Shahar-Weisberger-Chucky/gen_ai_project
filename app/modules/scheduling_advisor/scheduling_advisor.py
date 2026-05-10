@@ -16,25 +16,25 @@ load_dotenv()
 def _normalize_position(text: str) -> str | None:
     """Map free-text role mention to the exact DB position string."""
     t = text.lower()
-    if "python" in t:
-        return "Python Dev"
-    if "sql" in t or "database" in t:
-        return "Sql Dev"
     if re.search(r"\bml\b", t) or "machine learning" in t or "deep learn" in t:
         return "ML"
-    if "analyst" in t or "data" in t:
+    if "sql" in t or "database" in t:
+        return "Sql Dev"
+    if "analyst" in t:
         return "Analyst"
+    if "python" in t:
+        return "Python Dev"
     return None
 
 
 @tool
 def get_available_slots(reference_date: str, position_hint: str) -> str:
     """
-    Pull the next 5 available interview slots from the SQL Server calendar.
-    reference_date: YYYY-MM-DD
+    Pull the 3 nearest available interview slots from the SQL Server calendar.
+    reference_date: YYYY-MM-DD — return slots on or after this date.
     position_hint: free-text role from the conversation, e.g. "ML", "machine learning",
-                   "python developer", "sql", "analyst". The tool maps it to the DB value.
-    Returns a comma-separated list of date/time slots, or an error/clarification string.
+                   "python developer", "sql", "analyst". The tool normalises it to the DB value.
+    Returns a comma-separated list of up to 3 date/time slots, or an error string.
     """
     position = _normalize_position(position_hint)
     if position is None:
@@ -44,10 +44,10 @@ def get_available_slots(reference_date: str, position_hint: str) -> str:
             "ML Engineer, SQL Developer, Data Analyst, or Python Developer."
         )
 
-    driver = os.getenv("SQL_DRIVER", "{ODBC Driver 17 for SQL Server}")
-    server = os.getenv("SQL_SERVER", "localhost")
+    driver   = os.getenv("SQL_DRIVER", "{ODBC Driver 17 for SQL Server}")
+    server   = os.getenv("SQL_SERVER", "localhost")
     database = os.getenv("SQL_DATABASE", "Tech")
-    trusted = os.getenv("SQL_TRUSTED_CONNECTION", "yes")
+    trusted  = os.getenv("SQL_TRUSTED_CONNECTION", "yes")
     conn_str = (
         f"DRIVER={driver};"
         f"SERVER={server};"
@@ -55,12 +55,12 @@ def get_available_slots(reference_date: str, position_hint: str) -> str:
         f"Trusted_Connection={trusted};"
     )
     try:
-        conn = pyodbc.connect(conn_str)
+        conn   = pyodbc.connect(conn_str)
         cursor = conn.cursor()
 
         cursor.execute(
             """
-            SELECT TOP (5) [date], [time]
+            SELECT TOP (3) [date], [time]
             FROM   dbo.Schedule
             WHERE  position  = ?
               AND  available = 1
@@ -71,10 +71,11 @@ def get_available_slots(reference_date: str, position_hint: str) -> str:
         )
         rows = cursor.fetchall()
 
+        # Fall back to earliest available if nothing exists on/after reference_date
         if not rows:
             cursor.execute(
                 """
-                SELECT TOP (5) [date], [time]
+                SELECT TOP (3) [date], [time]
                 FROM   dbo.Schedule
                 WHERE  position  = ?
                   AND  available = 1
@@ -99,18 +100,27 @@ The company hires for four roles: ML Engineer, SQL Developer, Data Analyst, Pyth
 
 ROLE:
 Decide whether it is the right time to schedule an interview.
-When scheduling, call get_available_slots with reference_date and position_hint extracted
-from the conversation. The tool handles mapping the role to the DB — pass the role as the
-candidate described it (e.g. "ml", "machine learning", "python", "sql", "analyst").
+When scheduling, call get_available_slots with a computed reference_date and position_hint.
+
+DATE INFERENCE (critical):
+  • The conversation timestamp is your definition of "today".
+  • When the candidate mentions a relative time ("next Friday", "a week later", "in 2 weeks"),
+    compute the actual YYYY-MM-DD date from that timestamp and use it as reference_date.
+  • If previously offered slots are provided, relative references like "a week after" or
+    "a week later" mean one week after the FIRST previously-offered slot date — not after today.
+    Example: offered slots start on 2024-01-02, candidate says "a week later"
+             → reference_date = "2024-01-09"
+  • If the candidate gives no time preference, use today's date as reference_date.
+  • Compute reference_date yourself — do NOT guess or leave it as a default.
+
+POSITION:
+  • If the resolved position is provided, use it directly as position_hint.
+  • If not, extract from conversation. If unclear, return POSITION_UNKNOWN.
 
 INSTRUCTIONS:
   • IMMEDIATELY recommend schedule if the candidate explicitly requests an interview/meeting.
-    Do NOT ask about experience or qualifications in that case.
-  • If the candidate wants to schedule but the role is not clear from the conversation,
-    recommend "continue" with REASON: POSITION_UNKNOWN so the main agent can ask.
-  • If the tool returns POSITION_UNKNOWN, recommend "continue" with that reason.
-  • Recommend scheduling when the candidate appears interested, even with minimal context.
-  • Suggest exactly 2 or 3 specific slots when recommending scheduling.
+  • Suggest exactly 3 specific slots when recommending scheduling.
+  • If previously offered slots exist, do NOT return slots that overlap with them.
   • If no slots are available, recommend "continue" and explain.
 
 RESPONSE FORMAT (use exactly this structure):
@@ -120,40 +130,50 @@ REASON: <one sentence>
 """
 
 FEW_SHOT = """
---- Example 1: explicit request, role clear ---
-Conversation: Candidate wants ML position and says "lets schedule for ml position"
+--- Example 1: explicit request, no prior slots ---
+Conversation timestamp: 2024-04-01
+Candidate: "lets schedule for ml position"
+→ No time preference → reference_date = "2024-04-01"
 → call get_available_slots(reference_date="2024-04-01", position_hint="ml")
-→ slots returned: 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
+→ slots: 2024-04-02 09:00, 2024-04-02 14:00, 2024-04-03 10:00
 RECOMMENDATION: schedule
-SLOTS: 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
+SLOTS: 2024-04-02 09:00, 2024-04-02 14:00, 2024-04-03 10:00
 REASON: Candidate explicitly requested an interview for the ML position.
 
---- Example 2: explicit request, role unknown ---
-Conversation: Candidate says "i want to schedule an interview" but no role mentioned yet.
+--- Example 2: candidate wants slots a week later ---
+Conversation timestamp: 2024-01-01
+Previously offered slots: 2024-01-02 09:00, 2024-01-02 12:00, 2024-01-02 13:00
+Candidate: "maybe a week later?"
+→ "a week later" relative to first offered slot 2024-01-02 → reference_date = "2024-01-09"
+→ call get_available_slots(reference_date="2024-01-09", position_hint="ML")
+→ slots: 2024-01-09 10:00, 2024-01-10 14:00, 2024-01-11 09:00
+RECOMMENDATION: schedule
+SLOTS: 2024-01-09 10:00, 2024-01-10 14:00, 2024-01-11 09:00
+REASON: Candidate requested slots approximately one week after the previously offered ones.
+
+--- Example 3: candidate says "next Friday" ---
+Conversation timestamp: 2024-04-01 (Monday)
+Candidate: "can we do next Friday?"
+→ next Friday from 2024-04-01 = 2024-04-05 → reference_date = "2024-04-05"
+→ call get_available_slots(reference_date="2024-04-05", position_hint="Python Dev")
+→ slots: 2024-04-05 09:00, 2024-04-05 14:00, 2024-04-08 10:00
+RECOMMENDATION: schedule
+SLOTS: 2024-04-05 09:00, 2024-04-05 14:00, 2024-04-08 10:00
+REASON: Candidate requested slots around next Friday.
+
+--- Example 4: role unknown ---
+Candidate says "i want to schedule an interview" but no role mentioned.
 → call get_available_slots(reference_date="2024-04-01", position_hint="")
 → tool returns POSITION_UNKNOWN
 RECOMMENDATION: continue
 SLOTS: none
 REASON: POSITION_UNKNOWN
 
---- Example 3: preference given, role clear ---
-Candidate said "I can do next Wednesday or Thursday" for a Python Dev role.
-→ slots: 2024-04-10 14:00, 2024-04-11 10:00
-RECOMMENDATION: schedule
-SLOTS: 2024-04-10 14:00, 2024-04-11 10:00
-REASON: Candidate is interested and slots match their stated preference.
-
---- Example 4: first message only ---
+--- Example 5: no scheduling intent ---
 Candidate just introduced themselves, no scheduling intent expressed.
 RECOMMENDATION: continue
 SLOTS: none
 REASON: Too early to schedule; candidate has not expressed scheduling intent.
-
---- Example 5: disinterest ---
-Candidate said "Please remove me from your list."
-RECOMMENDATION: continue
-SLOTS: none
-REASON: Candidate is not interested; scheduling is not appropriate.
 """
 
 
@@ -161,7 +181,7 @@ class SchedulingAdvisor:
     def __init__(self):
         self.llm = ChatOpenAI(
             model="gpt-4o-mini",
-            temperature=0,       # deterministic slot selection
+            temperature=0,
             api_key=os.getenv("OPENAI_API_KEY"),
         )
         self.agent = create_agent(
@@ -175,43 +195,43 @@ class SchedulingAdvisor:
         conversation_history: str,
         conversation_time: Optional[str] = None,
         detected_position: Optional[str] = None,
+        last_offered_slots: Optional[str] = None,
     ) -> dict:
-        ref_date = self._reference_date(conversation_time)
+        today = conversation_time or datetime.now().isoformat()
 
-        if detected_position:
-            position_note = (
-                f"The candidate's role has already been resolved: '{detected_position}'. "
-                f"Use '{detected_position}' as position_hint when calling get_available_slots. "
-                "Do NOT try to infer the role from the conversation."
-            )
-        else:
-            position_note = (
-                "The candidate's role is not yet known. "
-                "Try to extract it from the conversation. "
-                "If it cannot be determined, return POSITION_UNKNOWN."
-            )
+        position_note = (
+            f"Resolved position: '{detected_position}'. "
+            f"Use '{detected_position}' as position_hint. Do NOT re-infer from conversation."
+            if detected_position
+            else
+            "Position not yet resolved — extract from conversation or return POSITION_UNKNOWN."
+        )
+
+        slot_note = (
+            f"Previously offered slots: {last_offered_slots}. "
+            "Candidate wants DIFFERENT slots. Compute reference_date from their time preference "
+            "relative to the first offered slot date. Do NOT return overlapping slots."
+            if last_offered_slots
+            else
+            "No slots have been offered yet. Use today's date as default reference_date if "
+            "the candidate gives no time preference."
+        )
 
         user_input = (
             f"{FEW_SHOT}\n\n"
             f"--- Current Conversation ---\n{conversation_history}\n\n"
-            f"Conversation timestamp: {conversation_time or 'unknown'}\n"
-            f"Position context: {position_note}\n"
-            f"reference_date='{ref_date}'\n"
-            "Decide whether to schedule an interview. If yes, call get_available_slots."
+            f"Conversation timestamp (today): {today}\n"
+            f"Position: {position_note}\n"
+            f"Slots: {slot_note}\n\n"
+            "Infer the candidate's time preference from the conversation, compute reference_date, "
+            "then call get_available_slots and decide whether to schedule."
         )
 
-        result = self.agent.invoke({"messages": [{"role": "user", "content": user_input}]})
+        result = self.agent.invoke(
+            {"messages": [{"role": "user", "content": user_input}]},
+            config={"recursion_limit": 8},   # prevent infinite loops
+        )
         return self._parse(result["messages"][-1].content)
-
-    @staticmethod
-    def _reference_date(conversation_time: Optional[str]) -> str:
-        if conversation_time:
-            try:
-                dt = datetime.fromisoformat(conversation_time.replace("Z", "+00:00"))
-                return dt.strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-        return datetime.now().strftime("%Y-%m-%d")
 
     @staticmethod
     def _parse(text: str) -> dict:

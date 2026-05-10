@@ -25,6 +25,7 @@ def _keyword_position(text: str) -> str | None:
         return "Python Dev"
     return None
 
+
 # ── Scheduling intent detection ───────────────────────────────────────────────
 # Two-layer check:
 #   1. Keywords — only the strongest unambiguous signals, zero API cost
@@ -35,6 +36,7 @@ _SCHEDULE_KEYWORDS = {"schedule", "interview", "appointment", "book a slot"}
 def _has_scheduling_intent_keywords(message: str) -> bool:
     t = message.lower()
     return any(kw in t for kw in _SCHEDULE_KEYWORDS)
+
 
 # ── Prompting strategy: Role + Instructions + Few-Shot + API param (temp=0.4) ─
 
@@ -101,32 +103,32 @@ Scheduling Advisor: continue | reason: POSITION_UNKNOWN
 ACTION: continue
 MESSAGE: Happy to schedule! Which role are you applying for? (ML Engineer, SQL Developer, Data Analyst, or Python Developer)
 
---- Example 3: schedule — role just clarified ---
+--- Example 3: schedule — candidate wants different time ---
 Detected Position: ML
-Candidate: ml engineer
-Scheduling Advisor: schedule — 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
+Context: We already offered slots on Jan 2. Candidate wants a week later.
+Scheduling Advisor: schedule — 2024-01-09 10:00, 2024-01-10 14:00, 2024-01-11 09:00
 ACTION: schedule
-MESSAGE: Great! For ML Engineer: Apr 10 at 9 AM, Apr 11 at 2 PM, or Apr 14 at 10 AM. Which works?
+MESSAGE: Sure! Here are ML slots around that time: Jan 9 at 10 AM, Jan 10 at 2 PM, or Jan 11 at 9 AM. Which works?
 
---- Example 4: continue (info answer) ---
+--- Example 4: end — candidate confirmed a slot ---
+Detected Position: ML
+Candidate: ok 2024-01-02 09:00 works for me
+ACTION: end
+MESSAGE: Perfect! Your ML interview is confirmed for Jan 2 at 9 AM. You'll receive a calendar invite shortly.
+
+--- Example 5: continue (info answer) ---
 Detected Position: Analyst
 Candidate: What tools does the team use?
 Info Advisor: retrieve — We use SQL, Python, and Power BI for analytics.
 ACTION: continue
 MESSAGE: The analytics team works with SQL, Python, and Power BI. Any other questions?
 
---- Example 5: end (disinterest) ---
+--- Example 6: end (disinterest) ---
 Detected Position: UNKNOWN
 Candidate: Please remove me from your list.
 Exit Advisor: end (high confidence) — candidate asked to be removed.
 ACTION: end
 MESSAGE: No worries — I appreciate the update. Best of luck in your search!
-
---- Example 6: end (booking confirmed) ---
-Detected Position: Sql Dev
-Candidate: Tuesday at 10 AM works for me.
-ACTION: end
-MESSAGE: Perfect! Your SQL Dev interview is confirmed for Tuesday at 10 AM. You'll receive a calendar invite.
 
 --- Example 7: continue (general conversation) ---
 Detected Position: ML
@@ -149,35 +151,38 @@ class MainAgent:
         self.info_advisor = info_advisor
         self.conversation_history: list[dict] = []
         self.candidate_position: str | None = None
+        self.last_action: str = "continue"
+        self.last_offered_slots: str | None = None
 
     def process_turn(
         self, candidate_message: str, conversation_time: Optional[str] = None
     ) -> tuple[str, str]:
         """
-        Handle one candidate message. Detects/updates position, consults all three
-        advisors, then asks the LLM to decide the action and write the response.
-        Returns (bot_message, action) — action is 'continue'|'schedule'|'end'.
+        Handle one candidate message. Detects/updates position, consults advisors,
+        then decides action. Returns (bot_message, action).
         """
         self.conversation_history.append({"role": "user", "content": candidate_message})
 
-        # Update position state from candidate messages only
         detected = self._detect_position()
         if detected is not None:
             self.candidate_position = detected
 
-        # ── Hard rule: scheduling intent detected ─────────────────────────────
-        # Bypass the LLM action decision entirely — the LLM has a training bias
-        # toward gathering more info, and this is a business rule not a judgment call.
+        # ── State: candidate is responding to slots we already offered ─────────
+        # Skip the hard scheduling rule — they are in a slot negotiation dialogue.
+        if self.last_action == "schedule":
+            return self._handle_slot_response(candidate_message, conversation_time)
+
+        # ── Hard rule: fresh scheduling intent ────────────────────────────────
+        # Bypass LLM action decision — the LLM has a training bias toward
+        # gathering more info, and "should I schedule?" is a business rule.
         if self._has_scheduling_intent(candidate_message):
             if not self.candidate_position:
                 message = (
                     "Happy to schedule! Which role are you applying for? "
                     "(ML Engineer, SQL Developer, Data Analyst, or Python Developer)"
                 )
-                self.conversation_history.append({"role": "assistant", "content": message})
-                return message, "continue"
+                return self._record_and_return("continue", message)
 
-            # Position known — get slots and force schedule
             sched_rec = self.scheduling_advisor.evaluate(
                 self._format_history(), conversation_time, self.candidate_position
             )
@@ -187,25 +192,63 @@ class MainAgent:
                     f"Sure! Here are available {self.candidate_position} interview slots: "
                     f"{slots}. Which works for you?"
                 )
-                self.conversation_history.append({"role": "assistant", "content": message})
-                return message, "schedule"
+                return self._record_and_return("schedule", message, slots=slots)
             else:
                 message = "No slots are available right now. I'll follow up shortly with options."
-                self.conversation_history.append({"role": "assistant", "content": message})
-                return message, "continue"
-        # ─────────────────────────────────────────────────────────────────────
+                return self._record_and_return("continue", message)
 
+        # ── Normal LLM flow ───────────────────────────────────────────────────
+        return self._llm_turn(candidate_message, conversation_time)
+
+    def _handle_slot_response(
+        self, candidate_message: str, conversation_time: Optional[str]
+    ) -> tuple[str, str]:
+        """
+        Called when last_action == 'schedule'. The candidate is responding to
+        slots we offered — either confirming one, requesting different times,
+        or asking a question. Never re-runs the hard scheduling rule here.
+        """
+        confirmed_slot = self._is_slot_confirmed(candidate_message)
+        if confirmed_slot:
+            position_label = self.candidate_position or ""
+            message = (
+                f"Perfect! Your {position_label} interview is confirmed for "
+                f"{confirmed_slot}. You'll receive a calendar invite shortly."
+            )
+            return self._record_and_return("end", message, slots=None)
+
+        # Not a confirmation — run normal LLM flow with slot context injected
+        return self._llm_turn(
+            candidate_message, conversation_time, in_slot_negotiation=True
+        )
+
+    def _llm_turn(
+        self,
+        candidate_message: str,
+        conversation_time: Optional[str],
+        in_slot_negotiation: bool = False,
+    ) -> tuple[str, str]:
+        """Full advisor + LLM flow."""
         history_text = self._format_history()
 
         exit_rec = self.exit_advisor.evaluate(history_text)
         sched_rec = self.scheduling_advisor.evaluate(
-            history_text, conversation_time, self.candidate_position
+            history_text,
+            conversation_time,
+            self.candidate_position,
+            last_offered_slots=self.last_offered_slots if in_slot_negotiation else None,
         )
         info_rec = self.info_advisor.evaluate(history_text, candidate_message)
 
         position_label = self.candidate_position or "UNKNOWN"
+        slot_context = (
+            f"CONTEXT: Slots already offered to candidate: {self.last_offered_slots}. "
+            "Do NOT repeat the same slots — only offer new ones if different.\n"
+            if in_slot_negotiation else ""
+        )
         advisor_block = (
             f"Detected Position: {position_label}\n"
+            f"{slot_context}"
             f"Exit Advisor    → {exit_rec['recommendation']} "
             f"({exit_rec.get('confidence','?')} confidence): {exit_rec.get('reason','')}\n"
             f"Scheduling Adv  → {sched_rec['recommendation']} | "
@@ -227,7 +270,19 @@ class MainAgent:
         ])
 
         action, message = self._parse(response.content)
+        new_slots = sched_rec.get("slots", "none") if action == "schedule" else None
+        return self._record_and_return(action, message, slots=new_slots)
+
+    def _record_and_return(
+        self, action: str, message: str, slots: Optional[str] = None
+    ) -> tuple[str, str]:
+        """Append bot message to history, update state, return (message, action)."""
         self.conversation_history.append({"role": "assistant", "content": message})
+        self.last_action = action
+        if action == "schedule" and slots:
+            self.last_offered_slots = slots
+        elif action == "end":
+            self.last_offered_slots = None
         return message, action
 
     def decide_action_only(self, history_text: str) -> str:
@@ -253,6 +308,8 @@ class MainAgent:
     def reset(self):
         self.conversation_history = []
         self.candidate_position = None
+        self.last_action = "continue"
+        self.last_offered_slots = None
 
     def _has_scheduling_intent(self, message: str) -> bool:
         """
@@ -270,6 +327,41 @@ class MainAgent:
         ))])
         return response.content.strip().upper().startswith("YES")
 
+    def confirm_slot(self, slot: str) -> tuple[str, str]:
+        """Directly confirm a slot chosen via UI button — bypasses LLM entirely."""
+        position_label = self.candidate_position or ""
+        self.conversation_history.append(
+            {"role": "user", "content": f"I'll take the {slot} slot."}
+        )
+        message = (
+            f"Your {position_label} interview is confirmed for {slot}. "
+            "We look forward to meeting you! You'll receive a calendar invite shortly."
+        )
+        return self._record_and_return("end", message, slots=None)
+
+    def _is_slot_confirmed(self, message: str) -> str | None:
+        """
+        Check if the candidate confirmed one of the offered slots.
+        Handles explicit picks AND vague acceptance ("ok", "whatever you want", "any works").
+        Returns the confirmed slot string, or None if they want different slots.
+        """
+        first_slot = (
+            self.last_offered_slots.split(",")[0].strip()
+            if self.last_offered_slots else ""
+        )
+        response = self.llm.invoke([HumanMessage(content=(
+            f"We offered these interview slots: {self.last_offered_slots}\n"
+            f'The candidate replied: "{message}"\n'
+            "Rules:\n"
+            "- If they named or clearly agreed to a specific slot → return that slot datetime.\n"
+            f"- If they said 'ok', 'sure', 'whatever you want', 'any works', 'fine', or any "
+            f"  vague acceptance → return the FIRST slot: '{first_slot}'.\n"
+            "- If they want DIFFERENT slots, more options, or a different time → reply: NO\n"
+            "Reply with ONLY the slot datetime (e.g. '2024-01-02 09:00') or NO."
+        ))])
+        result = response.content.strip()
+        return None if result.upper().startswith("NO") else result
+
     def _detect_position(self) -> str | None:
         """
         Scan only the candidate's messages for the target role.
@@ -282,16 +374,13 @@ class MainAgent:
             if msg["role"] == "user"
         )
 
-        # Fast path: keyword scan
         position = _keyword_position(candidate_text)
         if position:
             return position
 
-        # If there's not much text yet, don't bother with the LLM call
         if len(candidate_text.split()) < 5:
             return None
 
-        # Fallback: focused LLM call (temperature=0 for determinism)
         response = self.llm.invoke(
             [HumanMessage(content=(
                 "A job candidate sent these messages during a recruiting conversation.\n"
