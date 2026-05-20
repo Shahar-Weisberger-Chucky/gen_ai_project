@@ -110,7 +110,7 @@ DATE INFERENCE (critical):
     "a week later" mean one week after the FIRST previously-offered slot date — not after today.
     Example: offered slots start on 2024-01-02, candidate says "a week later"
              → reference_date = "2024-01-09"
-  • If the candidate gives no time preference, use today's date as reference_date.
+  • If the candidate gives no time preference, use tomorrow's date (today + 1 day) as reference_date.
   • Compute reference_date yourself — do NOT guess or leave it as a default.
 
 POSITION:
@@ -133,7 +133,7 @@ FEW_SHOT = """
 --- Example 1: explicit request, no prior slots ---
 Conversation timestamp: 2024-04-01
 Candidate: "lets schedule for ml position"
-→ No time preference → reference_date = "2024-04-01"
+→ No time preference → reference_date = "2024-04-02"  (today + 1 day)
 → call get_available_slots(reference_date="2024-04-01", position_hint="ml")
 → slots: 2024-04-02 09:00, 2024-04-02 14:00, 2024-04-03 10:00
 RECOMMENDATION: schedule
@@ -178,6 +178,32 @@ REASON: Too early to schedule; candidate has not expressed scheduling intent.
 
 
 class SchedulingAdvisor:
+    def _conn_str(self) -> str:
+        return (
+            f"DRIVER={os.getenv('SQL_DRIVER', '{ODBC Driver 17 for SQL Server}')};"
+            f"SERVER={os.getenv('SQL_SERVER', 'localhost')};"
+            f"DATABASE={os.getenv('SQL_DATABASE', 'Tech')};"
+            f"Trusted_Connection={os.getenv('SQL_TRUSTED_CONNECTION', 'yes')};"
+        )
+
+    def mark_slot_booked(self, slot_datetime: str, position: str) -> None:
+        """Mark a confirmed slot as unavailable so it isn't offered to other candidates."""
+        try:
+            parts = slot_datetime.strip().split(" ", 1)
+            date_str = parts[0]
+            time_str = (parts[1] if len(parts) > 1 else "09:00") + ":00"
+            conn = pyodbc.connect(self._conn_str())
+            conn.cursor().execute(
+                "UPDATE dbo.Schedule SET available = 0 "
+                "WHERE [date] = ? AND [time] = ? AND position = ?",
+                date_str, time_str, position,
+            )
+            conn.commit()
+            conn.close()
+            print(f"[SchedulingAdvisor] Booked: {slot_datetime} ({position})")
+        except Exception as exc:
+            print(f"[SchedulingAdvisor] mark_slot_booked failed: {exc}")
+
     def __init__(self):
         self.llm = ChatOpenAI(
             model="gpt-4o-mini",
@@ -213,8 +239,8 @@ class SchedulingAdvisor:
             "relative to the first offered slot date. Do NOT return overlapping slots."
             if last_offered_slots
             else
-            "No slots have been offered yet. Use today's date as default reference_date if "
-            "the candidate gives no time preference."
+            "No slots have been offered yet. Use tomorrow's date (today + 1 day) as default reference_date "
+            "if the candidate gives no time preference."
         )
 
         user_input = (

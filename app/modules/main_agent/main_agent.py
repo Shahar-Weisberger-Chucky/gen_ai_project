@@ -31,7 +31,7 @@ def _keyword_position(text: str) -> str | None:
 #   1. Keywords — only the strongest unambiguous signals, zero API cost
 #   2. LLM — handles everything else: typos, synonyms, contextual intent
 
-_SCHEDULE_KEYWORDS = {"schedule", "interview", "appointment", "book a slot"}
+_SCHEDULE_KEYWORDS = {"schedule", "interview", "appointment", "book a slot", "reschedule", "rescheduling"}
 
 def _has_scheduling_intent_keywords(message: str) -> bool:
     t = message.lower()
@@ -153,6 +153,7 @@ class MainAgent:
         self.candidate_position: str | None = None
         self.last_action: str = "continue"
         self.last_offered_slots: str | None = None
+        self.in_continuation: bool = False  # set True by UI after "Continue Conversation"
 
     def process_turn(
         self, candidate_message: str, conversation_time: Optional[str] = None
@@ -210,11 +211,26 @@ class MainAgent:
         """
         confirmed_slot = self._is_slot_confirmed(candidate_message)
         if confirmed_slot:
+            # Candidate may have confirmed a slot AND asked a role question in the
+            # same message (e.g. "Thursday works. Can you tell me more about the stack?").
+            # Check the Info Advisor and, if relevant, include the answer.
+            info_rec = self.info_advisor.evaluate(
+                self._format_history(), candidate_message, role=self.candidate_position
+            )
             position_label = self.candidate_position or ""
-            message = (
+            confirmation = (
                 f"Perfect! Your {position_label} interview is confirmed for "
                 f"{confirmed_slot}. You'll receive a calendar invite shortly."
             )
+            if (
+                info_rec.get("recommendation") == "retrieve"
+                and info_rec.get("content", "N/A") != "N/A"
+            ):
+                message = f"{confirmation} Also — {info_rec['content']}"
+            else:
+                message = confirmation
+            if self.candidate_position:
+                self.scheduling_advisor.mark_slot_booked(confirmed_slot, self.candidate_position)
             return self._record_and_return("end", message, slots=None)
 
         # Not a confirmation — run normal LLM flow with slot context injected
@@ -232,13 +248,19 @@ class MainAgent:
         history_text = self._format_history()
 
         exit_rec = self.exit_advisor.evaluate(history_text)
+        # After "Continue Conversation" the candidate explicitly wants to keep going,
+        # so ignore the ExitAdvisor's end recommendation for this one turn.
+        if self.in_continuation and exit_rec.get("recommendation") == "end":
+            exit_rec = {"recommendation": "continue", "confidence": "low",
+                        "reason": "Conversation resumed by candidate"}
+        self.in_continuation = False
         sched_rec = self.scheduling_advisor.evaluate(
             history_text,
             conversation_time,
             self.candidate_position,
             last_offered_slots=self.last_offered_slots if in_slot_negotiation else None,
         )
-        info_rec = self.info_advisor.evaluate(history_text, candidate_message)
+        info_rec = self.info_advisor.evaluate(history_text, candidate_message, role=self.candidate_position)
 
         position_label = self.candidate_position or "UNKNOWN"
         slot_context = (
@@ -310,6 +332,7 @@ class MainAgent:
         self.candidate_position = None
         self.last_action = "continue"
         self.last_offered_slots = None
+        self.in_continuation = False
 
     def _has_scheduling_intent(self, message: str) -> bool:
         """
@@ -337,6 +360,8 @@ class MainAgent:
             f"Your {position_label} interview is confirmed for {slot}. "
             "We look forward to meeting you! You'll receive a calendar invite shortly."
         )
+        if self.candidate_position:
+            self.scheduling_advisor.mark_slot_booked(slot, self.candidate_position)
         return self._record_and_return("end", message, slots=None)
 
     def _is_slot_confirmed(self, message: str) -> str | None:
