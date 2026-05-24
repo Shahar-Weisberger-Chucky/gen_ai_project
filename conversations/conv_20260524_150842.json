@@ -1,0 +1,46 @@
+{
+  "saved_at": "2026-05-24T15:08:42.522518",
+  "messages": [
+    {
+      "role": "assistant",
+      "content": "Hi! We received your application for our Python Developer position. I'm your recruiting assistant — could you tell me a bit about your Python experience?",
+      "action": "continue"
+    },
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "assistant",
+      "content": "Hi there! Thanks for reaching out. Can you share more about your experience with Python?",
+      "action": "continue"
+    },
+    {
+      "role": "user",
+      "content": "i  have 3 years wxperince. lets scedule"
+    },
+    {
+      "role": "assistant",
+      "content": "Happy to schedule! Which role are you applying for? (ML Engineer, SQL Developer, Data Analyst, or Python Developer)",
+      "action": "continue"
+    },
+    {
+      "role": "user",
+      "content": "python"
+    },
+    {
+      "role": "assistant",
+      "content": "Great! Available Python slots: May 26 at 3 PM, 4 PM, or 5 PM. Which works for you?",
+      "action": "schedule"
+    },
+    {
+      "role": "user",
+      "content": "I'll take the 2026-05-26 15:00 slot."
+    },
+    {
+      "role": "assistant",
+      "content": "Your Python Dev interview is confirmed for 2026-05-26 15:00. We look forward to meeting you! You'll receive a calendar invite shortly.",
+      "action": "end"
+    }
+  ]
+}

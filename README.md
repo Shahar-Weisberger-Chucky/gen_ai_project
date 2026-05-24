@@ -150,17 +150,21 @@ python -m app.main
 
 Open `tests/test_evals.ipynb` in Jupyter and run all cells.
 
-### Fine-tune the Exit Advisor (optional)
+### Fine-tune the Exit Advisor
 
-```python
-from app.modules.fine_tuning.fine_tuning import upload_and_train
-job_id = upload_and_train()   # prepares data, uploads, and starts the job
-```
+The fine-tuning pipeline is already complete. Results: **100% accuracy on 12 test examples**.
+See `tests/fine_tuning_results.md` for full details.
 
-Once complete, add the returned model ID to `.env`:
+The fine-tuned model is already wired into `.env`:
 ```env
-EXIT_ADVISOR_MODEL=ft:gpt-4.1-2025-04-14:your-org:exit-advisor:xxxxxxxx
+EXIT_ADVISOR_MODEL=ft:gpt-4.1-2025-04-14:chuckybuilder::Dj32h72n
 ```
+
+To re-run the fine-tuning pipeline from scratch:
+```bash
+python -m app.modules.fine_tuning.fine_tuning
+```
+This generates the JSONL train/test split, uploads to OpenAI, starts the SFT job, and evaluates once complete.
 
 ---
 
@@ -266,7 +270,7 @@ final_project/
 - [x] Main Agent orchestration
 - [x] Streamlit chat UI
 - [x] Evaluation notebook (Accuracy, Confusion Matrix)
-- [ ] Fine-tune Exit Advisor on labeled data
+- [x] Fine-tune Exit Advisor on labeled data (100% accuracy on test set — see `tests/fine_tuning_results.md`)
 - [ ] Deploy to Streamlit Community Cloud
 
 ---

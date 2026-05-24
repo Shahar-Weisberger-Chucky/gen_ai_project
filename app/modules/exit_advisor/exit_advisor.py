@@ -94,6 +94,15 @@ class ExitAdvisor:
     @staticmethod
     def _parse(text: str) -> dict:
         result = {"recommendation": "continue", "confidence": "low", "reason": ""}
+
+        # fine-tuned model outputs a single word; handle that first
+        stripped = text.strip().lower()
+        if stripped in ("end", "continue"):
+            result["recommendation"] = stripped
+            result["confidence"] = "high"
+            return result
+
+        # base model outputs RECOMMENDATION / CONFIDENCE / REASON lines
         for line in text.strip().splitlines():
             key, _, val = line.partition(":")
             key = key.strip().upper()

@@ -41,9 +41,8 @@ def run_cli():
     agent = create_agent()
 
     opening = (
-        "Hi! I'm a recruiting assistant for our company. "
-        "I'm here to help you through the hiring process. "
-        "Could you tell me a bit about yourself and the role you're interested in?"
+        "Hi! Thanks for reaching out about our Python Developer position. "
+        "I'm your recruiting assistant — could you tell me a bit about your Python experience?"
     )
     print(f"Bot: {opening}\n")
     agent.conversation_history.append({"role": "assistant", "content": opening})
