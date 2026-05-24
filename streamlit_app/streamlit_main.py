@@ -108,8 +108,9 @@ BADGE_HTML = {
     "end":      '<span class="badge badge-end">● Conversation closed</span>',
 }
 
+# Greeting reflects that the candidate already submitted an application
 OPENING_MESSAGE = (
-    "Hi! Thanks for reaching out about our Python Developer position. "
+    "Hi! We received your application for our Python Developer position. "
     "I'm your recruiting assistant — could you tell me a bit about your Python experience?"
 )
 
@@ -117,27 +118,49 @@ CONVERSATIONS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "conversations")
 )
 
+_CONFIRM_KEYWORDS = {"confirmed", "scheduled", "booked", "calendar invite", "look forward"}
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _extract_slots(text: str) -> list[str]:
-    return re.findall(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", text)
-
 def _format_slot(slot_str: str) -> str:
-    """Cross-platform slot formatter."""
+    """Cross-platform slot formatter: '2026-06-03 09:00' → 'Tue, Jun 3 at 09:00 AM'."""
+    if not slot_str:
+        return "your scheduled time"
     try:
         dt = datetime.strptime(slot_str.strip(), "%Y-%m-%d %H:%M")
         return dt.strftime(f"%a, %b {dt.day} at %I:%M %p")
     except Exception:
         return slot_str
 
+def _is_scheduled_end(message: str) -> bool:
+    """True when a conversation ended because an interview was confirmed."""
+    m = message.lower()
+    return any(kw in m for kw in _CONFIRM_KEYWORDS)
+
+def _is_happy_end() -> bool:
+    """True if the most recent assistant message indicates a confirmed interview."""
+    for m in reversed(st.session_state.get("messages", [])):
+        if m["role"] == "assistant":
+            return _is_scheduled_end(m["content"])
+    return False
+
 def _save_conversation() -> None:
-    """Persist the current conversation to conversations/ as a JSON file."""
+    """Persist the current conversation to conversations/ as a JSON file.
+    If the session was loaded from a file, overwrites that file in place
+    so there are no duplicates in the history list.
+    """
     msgs = st.session_state.get("messages", [])
-    if not msgs:
+    # nothing worth saving if no user messages exist
+    if not any(m["role"] == "user" for m in msgs):
         return
     os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
-    filename = f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    filepath = os.path.join(CONVERSATIONS_DIR, filename)
+    # overwrite original file if this session was loaded from one
+    loaded_from = st.session_state.get("loaded_from_path")
+    if loaded_from and os.path.exists(loaded_from):
+        filepath = loaded_from
+    else:
+        filename = f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        filepath = os.path.join(CONVERSATIONS_DIR, filename)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(
@@ -147,13 +170,102 @@ def _save_conversation() -> None:
     except Exception as exc:
         st.warning(f"Could not save conversation: {exc}")
 
-def _is_happy_end() -> bool:
-    """True if the conversation ended with a confirmed interview (not a rejection)."""
-    for m in reversed(st.session_state.get("messages", [])):
-        if m["role"] == "assistant":
-            text = m["content"].lower()
-            return any(w in text for w in ["confirmed", "scheduled", "booked", "calendar invite", "look forward"])
-    return False
+def _list_conversations() -> list[dict]:
+    """Return saved conversations sorted newest-first (up to 15)."""
+    if not os.path.exists(CONVERSATIONS_DIR):
+        return []
+    files = sorted(
+        [f for f in os.listdir(CONVERSATIONS_DIR) if f.endswith(".json")],
+        reverse=True,
+    )
+    result = []
+    for fname in files[:15]:
+        path = os.path.join(CONVERSATIONS_DIR, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            saved_at = data.get("saved_at", "")
+            try:
+                dt = datetime.fromisoformat(saved_at)
+                label = dt.strftime("%b %d, %Y  %H:%M")
+            except Exception:
+                label = fname
+            msg_count = sum(1 for m in data.get("messages", []) if m["role"] == "user")
+            result.append({"path": path, "label": label, "msg_count": msg_count, "fname": fname})
+        except Exception:
+            pass
+    return result
+
+def _guess_position(messages: list) -> str | None:
+    """Keyword-only position detection from a message list — no LLM cost."""
+    text = " ".join(m["content"] for m in messages if m["role"] == "user").lower()
+    if re.search(r"\bml\b", text) or "machine learning" in text or "deep learn" in text:
+        return "ML"
+    if "sql" in text or "database" in text:
+        return "Sql Dev"
+    if "analyst" in text:
+        return "Analyst"
+    if "python" in text:
+        return "Python Dev"
+    return None
+
+def _load_past_conversation(filepath: str) -> None:
+    """Restore a saved conversation into session state and rebuild the agent."""
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    messages = data.get("messages", [])
+
+    if "agent" not in st.session_state:
+        with st.spinner("Initialising agent…"):
+            st.session_state.agent = create_agent()
+
+    agent = st.session_state.agent
+    agent.reset()
+
+    for m in messages:
+        if m["role"] in ("user", "assistant"):
+            agent.conversation_history.append({"role": m["role"], "content": m["content"]})
+
+    agent.candidate_position = _guess_position(messages)
+
+    for m in reversed(messages):
+        if m.get("action"):
+            agent.last_action = m["action"]
+            break
+
+    st.session_state.messages = messages
+    st.session_state.ended = (agent.last_action == "end")
+    st.session_state.show_snow = False
+    st.session_state.show_confirmation_popup = False
+    st.session_state.confirmed_slot_display = ""
+    st.session_state.loaded_from_path = filepath  # track so save overwrites, not duplicates
+
+
+# ── Confirmation popup (requires Streamlit >= 1.36) ───────────────────────────
+@st.dialog("Interview Confirmed! 🎉")
+def _show_confirmation_popup():
+    slot = st.session_state.get("confirmed_slot_display", "your scheduled time")
+    st.markdown(f"""
+        <div style="text-align:center; padding: 0.5rem 0 1rem;">
+            <div style="font-size:3.2rem; margin-bottom:0.8rem;">📅</div>
+            <div style="font-size:1.05rem; color:#374151; margin-bottom:0.4rem;">
+                Your interview has been scheduled at:
+            </div>
+            <div style="font-size:1.45rem; font-weight:800; color:#2563eb;
+                        background:#eff6ff; padding:0.55rem 1.2rem; border-radius:10px;
+                        display:inline-block; margin:0.3rem 0 0.9rem;">
+                {slot}
+            </div>
+            <div style="color:#6b7280; font-size:0.88rem;">
+                A calendar invite will be sent to you shortly. Good luck!
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        if st.button("Got it! 🎉", use_container_width=True, type="primary"):
+            st.rerun()
+
 
 # ── Session state init ─────────────────────────────────────────────────────────
 if "agent" not in st.session_state:
@@ -173,6 +285,10 @@ if "agent" not in st.session_state:
     )
     st.session_state.ended = False
     st.session_state.show_snow = False
+    st.session_state.show_confirmation_popup = False
+    st.session_state.confirmed_slot_display = ""
+    st.session_state.loaded_from_path = None
+
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -211,6 +327,26 @@ with st.sidebar:
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
+
+    # ── Past conversations ─────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**Past Conversations**")
+    past_convs = _list_conversations()
+    if not past_convs:
+        st.caption("No saved conversations yet.")
+    else:
+        for conv_info in past_convs:
+            n = conv_info["msg_count"]
+            header = f"📋 {conv_info['label']}  ·  {n} msg{'s' if n != 1 else ''}"
+            with st.expander(header):
+                if st.button(
+                    "Load & Continue",
+                    key=f"load_{conv_info['fname']}",
+                    use_container_width=True,
+                ):
+                    _load_past_conversation(conv_info["path"])
+                    st.rerun()
+
 
 # ── Tips (before first user message only) ─────────────────────────────────────
 if not any(m["role"] == "user" for m in st.session_state.messages) and not st.session_state.ended:
@@ -251,13 +387,25 @@ if "pending_input" in st.session_state and not st.session_state.ended:
         )
         if action == "end":
             st.session_state.ended = True
-            st.session_state.show_snow = True
+            happy = _is_scheduled_end(response)
+            st.session_state.show_snow = happy
+            if happy:
+                raw_slot = st.session_state.agent.last_confirmed_slot
+                st.session_state.confirmed_slot_display = (
+                    _format_slot(raw_slot) if raw_slot else "your scheduled time"
+                )
+                st.session_state.show_confirmation_popup = True
         st.rerun()
 
-# ── Snow animation on end (once) ───────────────────────────────────────────────
+# ── Snow animation on happy end (once) ────────────────────────────────────────
 if st.session_state.get("show_snow"):
     st.snow()
     st.session_state.show_snow = False
+
+# ── Confirmation popup (once, on happy end) ────────────────────────────────────
+if st.session_state.get("show_confirmation_popup"):
+    st.session_state.show_confirmation_popup = False
+    _show_confirmation_popup()
 
 # ── Slot selection UI ──────────────────────────────────────────────────────────
 # Read raw slots from the agent (LLM rewrites datetimes as "May 28 at 9 AM" in the
@@ -294,6 +442,9 @@ if show_slot_ui:
                 )
                 st.session_state.ended = True
                 st.session_state.show_snow = True
+                raw_slot = st.session_state.agent.last_confirmed_slot or slot
+                st.session_state.confirmed_slot_display = _format_slot(raw_slot)
+                st.session_state.show_confirmation_popup = True
                 st.rerun()
         st.markdown('<div class="slot-hint">— or describe your preference in the chat below —</div>', unsafe_allow_html=True)
 
@@ -308,15 +459,21 @@ if not st.session_state.ended:
 # ── Ended screen ───────────────────────────────────────────────────────────────
 else:
     if _is_happy_end():
-        st.markdown("""
+        slot_display = st.session_state.get("confirmed_slot_display", "")
+        slot_line = (
+            f"Confirmed for <strong>{slot_display}</strong>."
+            if slot_display
+            else "We'll be in touch with the details."
+        )
+        st.markdown(f"""
 <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 100%);
             color: white; padding: 1.8rem; border-radius: 14px;
             text-align: center; margin: 1rem 0;">
     <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">📅</div>
-    <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 0.3rem;">It's a date!</div>
-    <div style="opacity: 0.88; font-size: 0.92rem;">
-        Your interview has been scheduled. We'll be in touch with the details.
+    <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 0.3rem;">
+        Your interview has been scheduled!
     </div>
+    <div style="opacity: 0.88; font-size: 0.92rem;">{slot_line}</div>
 </div>
 """, unsafe_allow_html=True)
     else:

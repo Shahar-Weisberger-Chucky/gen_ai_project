@@ -12,16 +12,9 @@ load_dotenv()
 def _keyword_position(text: str) -> str | None:
     """
     Fast keyword scan of candidate-only text → exact DB position string.
-    ML is checked before Python to avoid misclassifying ML engineers who use Python.
+    Currently only Python Developer is active; add more roles here when scaling up.
     """
-    t = text.lower()
-    if re.search(r"\bml\b", t) or "machine learning" in t or "deep learn" in t or "neural" in t:
-        return "ML"
-    if "sql" in t or "database" in t:
-        return "Sql Dev"
-    if "analyst" in t:
-        return "Analyst"
-    if "python" in t:
+    if "python" in text.lower():
         return "Python Dev"
     return None
 
@@ -40,14 +33,12 @@ def _has_scheduling_intent_keywords(message: str) -> bool:
 
 # ── Prompting strategy: Role + Instructions + Few-Shot + API param (temp=0.4) ─
 
-SYSTEM_PROMPT = """You are an SMS-based recruiter bot for a tech company that hires for four roles:
-ML Engineer, SQL Developer, Data Analyst, and Python Developer.
+SYSTEM_PROMPT = """You are an SMS-based recruiter bot for a tech company hiring for the Python Developer role.
 
 ROLE:
 You manage the recruiting conversation with the candidate turn-by-turn.
-Your goal: understand which role they are interested in, gather their background,
-answer their questions, and ultimately schedule an interview — or end the conversation
-politely if they are not interested.
+Your goal: gather the candidate's Python background, answer their questions, and
+ultimately schedule an interview — or end the conversation politely if they are not interested.
 
 INSTRUCTIONS:
 At each turn you MUST choose exactly one action and compose one short message:
@@ -57,8 +48,8 @@ At each turn you MUST choose exactly one action and compose one short message:
                 has a question.
 
   • schedule  — propose 2–3 specific interview time slots to the candidate.
-                Use when the candidate seems interested and qualified, and the
-                Scheduling Advisor provides available slots.
+                Use when the candidate seems interested and the Scheduling Advisor
+                provides available slots.
 
   • end       — close the conversation. Use when:
                   (a) The interview has been confirmed (final booking message), OR
@@ -66,12 +57,8 @@ At each turn you MUST choose exactly one action and compose one short message:
                       uninterested or has asked to stop contact.
 
 Priority rules:
-  0. If the candidate explicitly wants to schedule an interview:
-       a. If Detected Position is known AND Scheduling Advisor has slots → action = schedule
-       b. If Detected Position is UNKNOWN →
-          action = continue, ask ONLY: "Which role are you applying for?
-          (ML Engineer, SQL Developer, Data Analyst, or Python Developer)"
-          Do NOT ask about experience, qualifications, or anything else.
+  0. If the candidate explicitly wants to schedule an interview and the
+     Scheduling Advisor has slots → action = schedule
   1. If Exit Advisor recommends "end" with high confidence → action = end
   2. If interview was just confirmed (candidate agreed on a slot) → action = end
   3. If Scheduling Advisor recommends "schedule" and slots are available → action = schedule
@@ -89,53 +76,46 @@ MESSAGE: <your message to the candidate>
 """
 
 FEW_SHOT = """
---- Example 1: schedule — explicit request, role already known ---
-Detected Position: ML
-Candidate: lets schedule for ml position
+--- Example 1: schedule — explicit request ---
+Detected Position: Python Dev
+Candidate: lets schedule an interview
 Scheduling Advisor: schedule — 2024-04-10 09:00, 2024-04-11 14:00, 2024-04-14 10:00
 ACTION: schedule
-MESSAGE: Sure! Available ML slots: Apr 10 at 9 AM, Apr 11 at 2 PM, or Apr 14 at 10 AM. Which works?
+MESSAGE: Sure! Available Python Dev slots: Apr 10 at 9 AM, Apr 11 at 2 PM, or Apr 14 at 10 AM. Which works?
 
---- Example 2: continue — explicit request but role unknown ---
-Detected Position: UNKNOWN
-Candidate: i want to schedule an interview
-Scheduling Advisor: continue | reason: POSITION_UNKNOWN
-ACTION: continue
-MESSAGE: Happy to schedule! Which role are you applying for? (ML Engineer, SQL Developer, Data Analyst, or Python Developer)
-
---- Example 3: schedule — candidate wants different time ---
-Detected Position: ML
+--- Example 2: schedule — candidate wants different time ---
+Detected Position: Python Dev
 Context: We already offered slots on Jan 2. Candidate wants a week later.
 Scheduling Advisor: schedule — 2024-01-09 10:00, 2024-01-10 14:00, 2024-01-11 09:00
 ACTION: schedule
-MESSAGE: Sure! Here are ML slots around that time: Jan 9 at 10 AM, Jan 10 at 2 PM, or Jan 11 at 9 AM. Which works?
+MESSAGE: Sure! Here are Python Dev slots around that time: Jan 9 at 10 AM, Jan 10 at 2 PM, or Jan 11 at 9 AM. Which works?
 
---- Example 4: end — candidate confirmed a slot ---
-Detected Position: ML
+--- Example 3: end — candidate confirmed a slot ---
+Detected Position: Python Dev
 Candidate: ok 2024-01-02 09:00 works for me
 ACTION: end
-MESSAGE: Perfect! Your ML interview is confirmed for Jan 2 at 9 AM. You'll receive a calendar invite shortly.
+MESSAGE: Perfect! Your Python Dev interview is confirmed for Jan 2 at 9 AM. You'll receive a calendar invite shortly.
 
---- Example 5: continue (info answer) ---
-Detected Position: Analyst
+--- Example 4: continue (info answer) ---
+Detected Position: Python Dev
 Candidate: What tools does the team use?
-Info Advisor: retrieve — We use SQL, Python, and Power BI for analytics.
+Info Advisor: retrieve — We use Django, Flask, and FastAPI for backend services.
 ACTION: continue
-MESSAGE: The analytics team works with SQL, Python, and Power BI. Any other questions?
+MESSAGE: The team works with Django, Flask, and FastAPI. Any other questions?
 
---- Example 6: end (disinterest) ---
-Detected Position: UNKNOWN
+--- Example 5: end (disinterest) ---
+Detected Position: Python Dev
 Candidate: Please remove me from your list.
 Exit Advisor: end (high confidence) — candidate asked to be removed.
 ACTION: end
 MESSAGE: No worries — I appreciate the update. Best of luck in your search!
 
---- Example 7: continue (general conversation) ---
-Detected Position: ML
-Candidate: I've been working in machine learning for about two years.
+--- Example 6: continue (general conversation) ---
+Detected Position: Python Dev
+Candidate: I've been working with Python for about two years, mostly Django.
 Scheduling Advisor: continue — candidate has not expressed scheduling intent.
 ACTION: continue
-MESSAGE: Great background! What kind of ML projects have you worked on?
+MESSAGE: Great background! What kind of Python projects have you worked on?
 """
 
 
@@ -150,9 +130,10 @@ class MainAgent:
         self.scheduling_advisor = scheduling_advisor
         self.info_advisor = info_advisor
         self.conversation_history: list[dict] = []
-        self.candidate_position: str | None = None
+        self.candidate_position: str = "Python Dev"  # single-role mode; extend _keyword_position to add more
         self.last_action: str = "continue"
         self.last_offered_slots: str | None = None
+        self.last_confirmed_slot: str | None = None
         self.in_continuation: bool = False  # set True by UI after "Continue Conversation"
 
     def process_turn(
@@ -177,13 +158,6 @@ class MainAgent:
         # Bypass LLM action decision — the LLM has a training bias toward
         # gathering more info, and "should I schedule?" is a business rule.
         if self._has_scheduling_intent(candidate_message):
-            if not self.candidate_position:
-                message = (
-                    "Happy to schedule! Which role are you applying for? "
-                    "(ML Engineer, SQL Developer, Data Analyst, or Python Developer)"
-                )
-                return self._record_and_return("continue", message)
-
             sched_rec = self.scheduling_advisor.evaluate(
                 self._format_history(), conversation_time, self.candidate_position
             )
@@ -229,6 +203,7 @@ class MainAgent:
                 message = f"{confirmation} Also — {info_rec['content']}"
             else:
                 message = confirmation
+            self.last_confirmed_slot = confirmed_slot
             if self.candidate_position:
                 self.scheduling_advisor.mark_slot_booked(confirmed_slot, self.candidate_position)
             return self._record_and_return("end", message, slots=None)
@@ -329,9 +304,10 @@ class MainAgent:
 
     def reset(self):
         self.conversation_history = []
-        self.candidate_position = None
+        self.candidate_position = "Python Dev"
         self.last_action = "continue"
         self.last_offered_slots = None
+        self.last_confirmed_slot = None
         self.in_continuation = False
 
     def _has_scheduling_intent(self, message: str) -> bool:
@@ -360,6 +336,7 @@ class MainAgent:
             f"Your {position_label} interview is confirmed for {slot}. "
             "We look forward to meeting you! You'll receive a calendar invite shortly."
         )
+        self.last_confirmed_slot = slot
         if self.candidate_position:
             self.scheduling_advisor.mark_slot_booked(slot, self.candidate_position)
         return self._record_and_return("end", message, slots=None)
@@ -409,15 +386,14 @@ class MainAgent:
         response = self.llm.invoke(
             [HumanMessage(content=(
                 "A job candidate sent these messages during a recruiting conversation.\n"
-                "Which role are they most interested in?\n"
-                "Answer with EXACTLY one of: Python Dev, Sql Dev, Analyst, ML, UNKNOWN\n"
+                "Are they applying for the Python Developer role?\n"
+                "Answer with EXACTLY one of: Python Dev, UNKNOWN\n"
                 "No explanation — just the role name.\n\n"
                 f"Candidate messages:\n{candidate_text}"
             ))],
         )
         result = response.content.strip()
-        valid = {"Python Dev", "Sql Dev", "Analyst", "ML"}
-        return result if result in valid else None
+        return result if result == "Python Dev" else None
 
     def _format_history(self) -> str:
         lines = []

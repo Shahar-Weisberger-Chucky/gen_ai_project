@@ -96,7 +96,7 @@ def get_available_slots(reference_date: str, position_hint: str) -> str:
 # ── Prompting strategy: Role + Instructions + Few-Shot + API param (temp=0) ──
 
 SYSTEM_PROMPT = """You are the Interview Scheduling Advisor for a tech company recruiting chatbot.
-The company hires for four roles: ML Engineer, SQL Developer, Data Analyst, Python Developer.
+The company is hiring for the Python Developer role.
 
 ROLE:
 Decide whether it is the right time to schedule an interview.
@@ -174,6 +174,17 @@ Candidate just introduced themselves, no scheduling intent expressed.
 RECOMMENDATION: continue
 SLOTS: none
 REASON: Too early to schedule; candidate has not expressed scheduling intent.
+
+--- Example 6: candidate mentions a future month by name ---
+Conversation timestamp: 2026-05-24
+Previously offered slots: 2026-05-26 12:00, 2026-05-26 13:00, 2026-05-26 15:00
+Candidate: "lets schedule sometime in June please"
+→ "in June" / "sometime in June" → use the 1st of that month as reference_date = "2026-06-01"
+→ call get_available_slots(reference_date="2026-06-01", position_hint="Python Dev")
+→ slots: 2026-06-02 10:00, 2026-06-03 09:00, 2026-06-03 10:00
+RECOMMENDATION: schedule
+SLOTS: 2026-06-02 10:00, 2026-06-03 09:00, 2026-06-03 10:00
+REASON: Candidate requested slots in June; used June 1 as reference_date.
 """
 
 
