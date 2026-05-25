@@ -85,6 +85,18 @@ st.markdown("""
         border-color: #3b82f6 !important;
         color: #1e3a8a !important;
     }
+
+    /* Sidebar: second column button (delete) → red tint */
+    section[data-testid="stSidebar"] div[data-testid="column"]:last-child .stButton > button {
+        background-color: #fee2e2 !important;
+        border: 1px solid #fca5a5 !important;
+        color: #991b1b !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="column"]:last-child .stButton > button:hover {
+        background-color: #fecaca !important;
+        border-color: #f87171 !important;
+        color: #7f1d1d !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -117,8 +129,16 @@ OPENING_MESSAGE = (
 CONVERSATIONS_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "conversations")
 )
+INTERVIEW_FILE = os.path.join(CONVERSATIONS_DIR, "scheduled_interview.json")
 
 _CONFIRM_KEYWORDS = {"confirmed", "scheduled", "booked", "calendar invite", "look forward"}
+
+TIPS = [
+    "What's the tech stack or salary range?",
+    "Is the role remote or hybrid?",
+    "What Python experience is required?",
+    "I'm ready to schedule an interview!",
+]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -143,6 +163,33 @@ def _is_happy_end() -> bool:
         if m["role"] == "assistant":
             return _is_scheduled_end(m["content"])
     return False
+
+def _save_interview(slot_display: str) -> None:
+    """Persist the confirmed interview to disk — survives New Conversation."""
+    os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
+    try:
+        with open(INTERVIEW_FILE, "w", encoding="utf-8") as f:
+            json.dump({"slot_display": slot_display, "saved_at": datetime.now().isoformat()}, f)
+    except Exception:
+        pass
+
+def _load_interview() -> dict | None:
+    """Return persisted interview dict, or None if none exists."""
+    try:
+        if os.path.exists(INTERVIEW_FILE):
+            with open(INTERVIEW_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return None
+
+def _clear_interview() -> None:
+    """Delete the persisted interview file (called when rescheduling)."""
+    try:
+        if os.path.exists(INTERVIEW_FILE):
+            os.remove(INTERVIEW_FILE)
+    except Exception:
+        pass
 
 def _save_conversation() -> None:
     """Persist the current conversation to conversations/ as a JSON file.
@@ -175,7 +222,8 @@ def _list_conversations() -> list[dict]:
     if not os.path.exists(CONVERSATIONS_DIR):
         return []
     files = sorted(
-        [f for f in os.listdir(CONVERSATIONS_DIR) if f.endswith(".json")],
+        [f for f in os.listdir(CONVERSATIONS_DIR)
+         if f.endswith(".json") and f != "scheduled_interview.json"],
         reverse=True,
     )
     result = []
@@ -239,6 +287,7 @@ def _load_past_conversation(filepath: str) -> None:
     st.session_state.show_confirmation_popup = False
     st.session_state.confirmed_slot_display = ""
     st.session_state.loaded_from_path = filepath  # track so save overwrites, not duplicates
+    st.session_state.used_tips = set()
 
 
 # ── Confirmation popup (requires Streamlit >= 1.36) ───────────────────────────
@@ -267,6 +316,86 @@ def _show_confirmation_popup():
             st.rerun()
 
 
+@st.dialog("Delete All Conversations?")
+def _confirm_delete_all_dialog():
+    st.warning("This will permanently delete all saved conversations. This cannot be undone.")
+    _, c1, c2, _ = st.columns([0.5, 1.5, 1.5, 0.5])
+    with c1:
+        if st.button("Cancel", use_container_width=True):
+            st.rerun()
+    with c2:
+        if st.button("Delete All", type="primary", use_container_width=True):
+            if os.path.exists(CONVERSATIONS_DIR):
+                for _fname in os.listdir(CONVERSATIONS_DIR):
+                    if _fname.endswith(".json") and _fname != "scheduled_interview.json":
+                        try:
+                            os.remove(os.path.join(CONVERSATIONS_DIR, _fname))
+                        except Exception:
+                            pass
+            st.rerun()
+
+
+@st.dialog("Delete Conversation?")
+def _confirm_delete_one_dialog():
+    path  = st.session_state.get("_del_path", "")
+    label = st.session_state.get("_del_label", "this conversation")
+    st.warning(f"Delete **{label}**? This cannot be undone.")
+    _, c1, c2, _ = st.columns([0.5, 1.5, 1.5, 0.5])
+    with c1:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.pop("_del_path", None)
+            st.session_state.pop("_del_label", None)
+            st.rerun()
+    with c2:
+        if st.button("Delete", type="primary", use_container_width=True):
+            try:
+                if path:
+                    os.remove(path)
+            except Exception:
+                pass
+            st.session_state.pop("_del_path", None)
+            st.session_state.pop("_del_label", None)
+            st.rerun()
+
+
+@st.dialog("Your Scheduled Interview")
+def _show_interview_details_dialog():
+    _iv = _load_interview()
+    slot = (
+        _iv.get("slot_display", "") if _iv
+        else st.session_state.get("confirmed_slot_display", "")
+    ) or "your scheduled time"
+    st.markdown(f"""
+        <div style="text-align:center; padding:0.5rem 0 1rem;">
+            <div style="font-size:2.4rem; margin-bottom:0.6rem;">📅</div>
+            <div style="font-size:0.85rem; color:#6b7280; margin-bottom:0.1rem;">Role</div>
+            <div style="font-size:1.1rem; font-weight:700; color:#1e3a5f; margin-bottom:0.7rem;">
+                Python Developer
+            </div>
+            <div style="font-size:0.85rem; color:#6b7280; margin-bottom:0.1rem;">Scheduled Time</div>
+            <div style="font-size:1.3rem; font-weight:800; color:#2563eb;
+                        background:#eff6ff; padding:0.4rem 1rem; border-radius:10px;
+                        display:inline-block; margin-bottom:0.8rem;">
+                {slot}
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    _, c1, c2, _ = st.columns([0.5, 1.5, 1.5, 0.5])
+    with c1:
+        if st.button("Close", use_container_width=True):
+            st.rerun()
+    with c2:
+        if st.button("Change Interview Time", type="primary", use_container_width=True):
+            st.session_state.do_reschedule = True
+            st.rerun()
+
+
+# ── Reschedule mode: triggered by "Change Interview Time" in the details popup ─
+if st.session_state.pop("do_reschedule", False):
+    for _key in list(st.session_state.keys()):
+        del st.session_state[_key]
+    st.session_state.reschedule_mode = True
+
 # ── Session state init ─────────────────────────────────────────────────────────
 if "agent" not in st.session_state:
     try:
@@ -277,17 +406,25 @@ if "agent" not in st.session_state:
         st.info("Check that your OPENAI_API_KEY is set in the .env file and try refreshing.")
         st.stop()
 
-    st.session_state.messages = [
-        {"role": "assistant", "content": OPENING_MESSAGE, "action": "continue"}
-    ]
-    st.session_state.agent.conversation_history.append(
-        {"role": "assistant", "content": OPENING_MESSAGE}
-    )
+    _reschedule = st.session_state.pop("reschedule_mode", False)
+    if _reschedule:
+        _rmsg = "I need to reschedule my Python Developer interview."
+        st.session_state.messages = [{"role": "user", "content": _rmsg}]
+        st.session_state.agent.conversation_history.append({"role": "user", "content": _rmsg})
+        st.session_state.pending_input = _rmsg
+    else:
+        st.session_state.messages = [
+            {"role": "assistant", "content": OPENING_MESSAGE, "action": "continue"}
+        ]
+        st.session_state.agent.conversation_history.append(
+            {"role": "assistant", "content": OPENING_MESSAGE}
+        )
     st.session_state.ended = False
     st.session_state.show_snow = False
     st.session_state.show_confirmation_popup = False
     st.session_state.confirmed_slot_display = ""
     st.session_state.loaded_from_path = None
+    st.session_state.used_tips = set()
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -321,6 +458,22 @@ with st.sidebar:
         "Ask about the tech stack, work model, requirements, or schedule your interview!"
     )
 
+    # ── Scheduled interview widget ─────────────────────────────────────────────
+    _iv = _load_interview()
+    _slot = (
+        _iv.get("slot_display", "") if _iv
+        else st.session_state.get("confirmed_slot_display", "")
+    )
+    if _slot:
+        st.markdown(f"""
+<div style="background:#d1fae5; border:1px solid #6ee7b7; border-radius:10px;
+            padding:0.6rem 0.8rem; margin-bottom:0.5rem; font-size:0.85rem;">
+    <div style="font-weight:700; color:#065f46; margin-bottom:0.2rem;">✅ Interview Scheduled</div>
+    <div style="color:#047857;">{_slot}</div>
+</div>""", unsafe_allow_html=True)
+        if st.button("📅 View / Change Interview", use_container_width=True):
+            st.session_state.show_interview_details = True
+            st.rerun()
     st.divider()
     if st.button("🔄 New Conversation", use_container_width=True):
         _save_conversation()
@@ -339,26 +492,35 @@ with st.sidebar:
             n = conv_info["msg_count"]
             header = f"📋 {conv_info['label']}  ·  {n} msg{'s' if n != 1 else ''}"
             with st.expander(header):
-                if st.button(
-                    "Load & Continue",
-                    key=f"load_{conv_info['fname']}",
-                    use_container_width=True,
-                ):
-                    _load_past_conversation(conv_info["path"])
-                    st.rerun()
+                c_load, c_del = st.columns([3, 1])
+                with c_load:
+                    if st.button("Load", key=f"load_{conv_info['fname']}", use_container_width=True):
+                        _load_past_conversation(conv_info["path"])
+                        st.rerun()
+                with c_del:
+                    if st.button("🗑️", key=f"del_{conv_info['fname']}", use_container_width=True):
+                        st.session_state._del_path  = conv_info["path"]
+                        st.session_state._del_label = conv_info["label"]
+                        st.session_state.confirm_delete_one = True
+                        st.rerun()
+        st.divider()
+        if st.button("🗑️ Delete All Conversations", use_container_width=True):
+            st.session_state.confirm_delete_all = True
+            st.rerun()
 
 
-# ── Tips (before first user message only) ─────────────────────────────────────
-if not any(m["role"] == "user" for m in st.session_state.messages) and not st.session_state.ended:
-    st.markdown("""
-<div class="tips-box">
-    <b>What you can ask me:</b><br>
-    &nbsp;&nbsp;• What's the tech stack or salary range?<br>
-    &nbsp;&nbsp;• Is the role remote or hybrid?<br>
-    &nbsp;&nbsp;• What Python experience is required?<br>
-    &nbsp;&nbsp;• Ready to schedule an interview!
-</div>
-""", unsafe_allow_html=True)
+# ── Dialog triggers ────────────────────────────────────────────────────────────
+if st.session_state.get("confirm_delete_all"):
+    st.session_state.confirm_delete_all = False
+    _confirm_delete_all_dialog()
+
+if st.session_state.get("confirm_delete_one"):
+    st.session_state.confirm_delete_one = False
+    _confirm_delete_one_dialog()
+
+if st.session_state.get("show_interview_details"):
+    st.session_state.show_interview_details = False
+    _show_interview_details_dialog()
 
 # ── Render chat history ────────────────────────────────────────────────────────
 for msg in st.session_state.messages:
@@ -394,6 +556,7 @@ if "pending_input" in st.session_state and not st.session_state.ended:
                 st.session_state.confirmed_slot_display = (
                     _format_slot(raw_slot) if raw_slot else "your scheduled time"
                 )
+                _save_interview(st.session_state.confirmed_slot_display)
                 st.session_state.show_confirmation_popup = True
         st.rerun()
 
@@ -444,9 +607,32 @@ if show_slot_ui:
                 st.session_state.show_snow = True
                 raw_slot = st.session_state.agent.last_confirmed_slot or slot
                 st.session_state.confirmed_slot_display = _format_slot(raw_slot)
+                _save_interview(st.session_state.confirmed_slot_display)
                 st.session_state.show_confirmation_popup = True
                 st.rerun()
         st.markdown('<div class="slot-hint">— or describe your preference in the chat below —</div>', unsafe_allow_html=True)
+
+# ── Clickable suggestion buttons ──────────────────────────────────────────────
+_used_tips = st.session_state.get("used_tips", set())
+_thinking   = "pending_input" in st.session_state
+_all_used   = len(_used_tips) >= len(TIPS)
+
+if not st.session_state.ended and not _all_used and not show_slot_ui:
+    st.markdown("""<div style="background:#eff6ff; border-left:4px solid #3b82f6;
+        padding:0.6rem 1rem 0.3rem; border-radius:0 10px 10px 0;
+        margin:0.5rem 0 0.4rem; font-size:0.9rem;">
+        <b style="color:#1d4ed8;">What you can ask me</b> — click to send:
+    </div>""", unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    for i, tip in enumerate(TIPS):
+        used  = i in _used_tips
+        label = ("✓  " + tip) if used else tip
+        col   = c1 if i % 2 == 0 else c2
+        if col.button(label, key=f"tip_{i}", disabled=(used or _thinking), use_container_width=True):
+            st.session_state.used_tips.add(i)
+            st.session_state.messages.append({"role": "user", "content": tip})
+            st.session_state.pending_input = tip
+            st.rerun()
 
 # ── Chat input ─────────────────────────────────────────────────────────────────
 if not st.session_state.ended:

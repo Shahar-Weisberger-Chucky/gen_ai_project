@@ -26,9 +26,16 @@ def _keyword_position(text: str) -> str | None:
 
 _SCHEDULE_KEYWORDS = {"schedule", "interview", "appointment", "book a slot", "reschedule", "rescheduling"}
 
+_QUESTION_STARTERS = ("what", "how", "is ", "are ", "can ", "do ", "does ", "why ", "when ", "where ", "who ")
+
 def _has_scheduling_intent_keywords(message: str) -> bool:
     t = message.lower()
     return any(kw in t for kw in _SCHEDULE_KEYWORDS)
+
+def _is_pure_question(message: str) -> bool:
+    """True for messages that are clearly info questions — no scheduling intent possible."""
+    t = message.lower().strip()
+    return t.endswith("?") or any(t.startswith(p) for p in _QUESTION_STARTERS)
 
 
 # ── Prompting strategy: Role + Instructions + Few-Shot + API param (temp=0.4) ─
@@ -229,12 +236,17 @@ class MainAgent:
             exit_rec = {"recommendation": "continue", "confidence": "low",
                         "reason": "Conversation resumed by candidate"}
         self.in_continuation = False
-        sched_rec = self.scheduling_advisor.evaluate(
-            history_text,
-            conversation_time,
-            self.candidate_position,
-            last_offered_slots=self.last_offered_slots if in_slot_negotiation else None,
-        )
+        # Skip the SchedulingAdvisor (an AgentExecutor) for obvious info questions —
+        # it would always return "continue" anyway, and the call costs ~2 extra LLM round-trips.
+        if _is_pure_question(candidate_message) and not in_slot_negotiation:
+            sched_rec = {"recommendation": "continue", "slots": "none", "reason": "info question"}
+        else:
+            sched_rec = self.scheduling_advisor.evaluate(
+                history_text,
+                conversation_time,
+                self.candidate_position,
+                last_offered_slots=self.last_offered_slots if in_slot_negotiation else None,
+            )
         info_rec = self.info_advisor.evaluate(history_text, candidate_message, role=self.candidate_position)
 
         position_label = self.candidate_position or "UNKNOWN"
@@ -313,11 +325,14 @@ class MainAgent:
     def _has_scheduling_intent(self, message: str) -> bool:
         """
         Layer 1 — keywords: instant True for the strongest unambiguous signals.
+        Layer 1b — question pattern: instant False for obvious info questions (no LLM cost).
         Layer 2 — LLM: handles typos, synonyms, and contextual intent that
                   keywords will never reliably catch.
         """
         if _has_scheduling_intent_keywords(message):
             return True
+        if _is_pure_question(message):
+            return False
         response = self.llm.invoke([HumanMessage(content=(
             "A job candidate sent this message during a recruiting conversation.\n"
             "Does the candidate want to schedule an interview or meeting?\n"

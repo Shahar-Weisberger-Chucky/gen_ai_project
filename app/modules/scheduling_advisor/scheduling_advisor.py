@@ -104,8 +104,11 @@ When scheduling, call get_available_slots with a computed reference_date and pos
 
 DATE INFERENCE (critical):
   • The conversation timestamp is your definition of "today".
-  • When the candidate mentions a relative time ("next Friday", "a week later", "in 2 weeks"),
-    compute the actual YYYY-MM-DD date from that timestamp and use it as reference_date.
+  • When the candidate mentions a relative time ("next Friday", "a week later", "in 2 weeks",
+    "next week"), compute the actual YYYY-MM-DD date from that timestamp and use it as reference_date.
+  • "next week" means the calendar week that starts on the NEXT Monday after today.
+    Example: today = 2026-05-25 (Mon) → "next week" starts 2026-06-01 → reference_date = "2026-06-01"
+    Example: today = 2026-05-27 (Wed) → "next week" starts 2026-06-01 → reference_date = "2026-06-01"
   • If previously offered slots are provided, relative references like "a week after" or
     "a week later" mean one week after the FIRST previously-offered slot date — not after today.
     Example: offered slots start on 2024-01-02, candidate says "a week later"
@@ -185,6 +188,17 @@ Candidate: "lets schedule sometime in June please"
 RECOMMENDATION: schedule
 SLOTS: 2026-06-02 10:00, 2026-06-03 09:00, 2026-06-03 10:00
 REASON: Candidate requested slots in June; used June 1 as reference_date.
+
+--- Example 7: candidate says "next week" ---
+Conversation timestamp: 2026-05-25 (Monday)
+Candidate: "lets schedule, sometime next week"
+→ "next week" = the calendar week starting the NEXT Monday after today
+→ today is Monday 2026-05-25, so NEXT Monday = 2026-06-01 → reference_date = "2026-06-01"
+→ call get_available_slots(reference_date="2026-06-01", position_hint="Python Dev")
+→ slots: 2026-06-02 10:00, 2026-06-03 09:00, 2026-06-03 12:00
+RECOMMENDATION: schedule
+SLOTS: 2026-06-02 10:00, 2026-06-03 09:00, 2026-06-03 12:00
+REASON: Candidate said "next week"; next Monday is Jun 1, so used that as reference_date.
 """
 
 
