@@ -316,6 +316,23 @@ def _show_confirmation_popup():
             st.rerun()
 
 
+@st.dialog("Delete Scheduled Interview?")
+def _confirm_delete_interview_dialog():
+    slot = st.session_state.get("_interview_slot_display", "your scheduled interview")
+    st.warning(f"Remove the scheduled interview at **{slot}**? This cannot be undone.")
+    _, c1, c2, _ = st.columns([0.5, 1.5, 1.5, 0.5])
+    with c1:
+        if st.button("Cancel", use_container_width=True):
+            st.session_state.pop("_interview_slot_display", None)
+            st.rerun()
+    with c2:
+        if st.button("Delete", type="primary", use_container_width=True):
+            _clear_interview()
+            st.session_state.confirmed_slot_display = ""
+            st.session_state.pop("_interview_slot_display", None)
+            st.rerun()
+
+
 @st.dialog("Delete All Conversations?")
 def _confirm_delete_all_dialog():
     st.warning("This will permanently delete all saved conversations. This cannot be undone.")
@@ -471,9 +488,16 @@ with st.sidebar:
     <div style="font-weight:700; color:#065f46; margin-bottom:0.2rem;">✅ Interview Scheduled</div>
     <div style="color:#047857;">{_slot}</div>
 </div>""", unsafe_allow_html=True)
-        if st.button("📅 View / Change Interview", use_container_width=True):
-            st.session_state.show_interview_details = True
-            st.rerun()
+        c_btn, c_del = st.columns([4, 1])
+        with c_btn:
+            if st.button("📅 View / Change Interview", use_container_width=True):
+                st.session_state.show_interview_details = True
+                st.rerun()
+        with c_del:
+            if st.button("🗑️", key="del_interview", use_container_width=True):
+                st.session_state._interview_slot_display = _slot
+                st.session_state.confirm_delete_interview = True
+                st.rerun()
     st.divider()
     if st.button("🔄 New Conversation", use_container_width=True):
         _save_conversation()
@@ -510,6 +534,10 @@ with st.sidebar:
 
 
 # ── Dialog triggers ────────────────────────────────────────────────────────────
+if st.session_state.get("confirm_delete_interview"):
+    st.session_state.confirm_delete_interview = False
+    _confirm_delete_interview_dialog()
+
 if st.session_state.get("confirm_delete_all"):
     st.session_state.confirm_delete_all = False
     _confirm_delete_all_dialog()

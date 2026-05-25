@@ -39,7 +39,7 @@
 
 ## About The Project
 
-> I built this as my final project for the Generative AI & LLMs hands-on course.
+> We built this as our final project for the Generative AI & LLMs hands-on course.
 > The idea is a recruiting chatbot that talks to Python Developer candidates over SMS —
 > it collects their background, answers questions about the job from a PDF knowledge base,
 > checks the recruiter's actual calendar for open slots, and knows when to close the conversation.
@@ -295,7 +295,7 @@ Distributed under the MIT License.
 
 ## Contact
 
-**Shahar Weisberger-Chucky**  
+**Shahar Weisberger-Chucky** & **Eilay Hacmon**  
 Project Link: [https://github.com/Shahar-Weisberger-Chucky/gen_ai_project](https://github.com/Shahar-Weisberger-Chucky/gen_ai_project)
 
 ---
